@@ -74,7 +74,7 @@ def safe_is_numeric(col):
 # Page Content
 # ----------------------------
 if page == "🏠 Overview":
-    st.title("🚑 EMS-Reported Crash Injury Disparities: A Policy Analysis Tool")
+    st.title(" EMS-Reported Crash Injury Disparities: A Policy Analysis Tool")
     
     st.markdown("""
     This dashboard provides key insights into traffic injury disparities across the U.S. By analyzing national EMS data, I identify high-risk demographic subgroups to support data-driven policy and targeted safety interventions.
@@ -354,6 +354,7 @@ elif page == "📊 Visualization":
                          title='Crash Counts by U.S. Census Division')
             fig_div.update_layout(xaxis_tickangle=35, showlegend=False)
             st.plotly_chart(fig_div, use_container_width=True)
+
 
 
 
