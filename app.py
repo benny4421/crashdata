@@ -364,8 +364,14 @@ elif page == "📈 Model 1 – Negative Binomial":
     st.title("📈 Model 1 – Negative Binomial Count Model")
 
     st.markdown("""
-    This model estimates EMS crash injury counts across demographic and geographic subgroups
-    using a Negative Binomial regression.
+    **Objective.**  
+    Model 1 estimates **EMS crash injury counts** across demographic and geographic subgroups
+    using a **Negative Binomial regression**.  
+
+    - Unit of analysis: grouped cells defined by **Race × Gender × AgeGroup × Division × Urbanicity × Year**  
+    - Outcome: `InjuryCount` (number of EMS-reported crash injuries in each cell)  
+    - Model type: Count model (**Negative Binomial**) with a log link  
+    - Offset: log(Population) so that coefficients can be interpreted as **rate ratios**  
     """)
 
     # ------------------------
@@ -387,8 +393,9 @@ elif page == "📈 Model 1 – Negative Binomial":
 
     **{ " × ".join(group_cols) }**
 
-    - **InjuryCount** = number of EMS records in each subgroup  
-    - **Population** = approximated for modeling  
+    For each subgroup:
+    - **InjuryCount** = number of EMS records  
+    - **Population** = approximated denominator used in the rate model  
     - **Rate100k_raw** = InjuryCount / Population × 100,000
     """)
 
@@ -396,7 +403,7 @@ elif page == "📈 Model 1 – Negative Binomial":
         with st.spinner("Running Negative Binomial regression..."):
 
             # ------------------------
-            # 그룹화 및 InjuryCount 생성
+            # 2) 그룹화 및 InjuryCount 생성
             # ------------------------
             grouped = (
                 fdf
@@ -406,23 +413,25 @@ elif page == "📈 Model 1 – Negative Binomial":
                 .reset_index(name="InjuryCount")
             )
 
-            # Population proxy (기존 연구 흐름 유지 용도)
+            # Population proxy (denominator for rate modeling)
             grouped['Population'] = grouped['InjuryCount'].clip(lower=1) * 1000.0
             grouped['Rate100k_raw'] = grouped['InjuryCount'] / grouped['Population'] * 100000
 
-            # NHPI 제거
             model_df = grouped.copy()
+
+            # NHPI 제거 (연구 설정과 일치시키기 위함)
             if 'Race' in model_df.columns:
                 model_df = model_df[model_df['Race'] != 'native hawaiian or other pacific islander']
 
+            st.markdown(f"Number of grouped cells used in the model: **{len(model_df):,}**")
+
             # ------------------------
-            # Negative Binomial 모델 적합
+            # 3) Negative Binomial 모델 적합
             # ------------------------
             predictors = [
                 c for c in ['Race','Gender','AgeGroup','USCensusDivision','Urbanicity_code','Year']
                 if c in model_df.columns
             ]
-
             formula = "InjuryCount ~ " + " + ".join(predictors)
 
             nb_model = smf.glm(
@@ -433,14 +442,56 @@ elif page == "📈 Model 1 – Negative Binomial":
             ).fit()
 
             # ------------------------
-            # 결과 요약
+            # 4) 베이스 카테고리 표시
             # ------------------------
-            st.subheader("Model Summary")
+            baseline_lines = []
+            if 'Race' in model_df.columns:
+                baseline_lines.append(f"- **Race**: {sorted(model_df['Race'].dropna().unique())[0]}")
+            if 'Gender' in model_df.columns:
+                baseline_lines.append(f"- **Gender**: {sorted(model_df['Gender'].dropna().unique())[0]}")
+            if 'AgeGroup' in model_df.columns:
+                # AgeGroup은 이미 ordered 카테고리라면 그 순서 사용
+                if pd.api.types.is_categorical_dtype(model_df['AgeGroup']):
+                    baseline_age = model_df['AgeGroup'].cat.categories[0]
+                else:
+                    baseline_age = sorted(model_df['AgeGroup'].dropna().unique())[0]
+                baseline_lines.append(f"- **AgeGroup**: {baseline_age}")
+            if 'USCensusDivision' in model_df.columns:
+                baseline_lines.append(f"- **USCensusDivision**: {sorted(model_df['USCensusDivision'].dropna().unique())[0]}")
+            if 'Urbanicity_code' in model_df.columns:
+                baseline_lines.append(f"- **Urbanicity_code**: {sorted(model_df['Urbanicity_code'].dropna().unique())[0]}")
+            baseline_lines.append("- **Year**: lowest year in the data (trend is modeled relative to this)")
+
+            st.subheader("Reference Categories")
+            st.markdown("""
+            Categorical variables are coded relative to a **reference category**.  
+            Each term like `Race[T.Asian]` compares that group to the baseline Race.
+            """)
+            st.markdown("\n".join(baseline_lines))
+
+            # ------------------------
+            # 5) 결과 요약 (계수 테이블)
+            # ------------------------
+            st.subheader("Model Summary (Coefficient Table)")
             coef_table = nb_model.summary2().tables[1].reset_index().rename(columns={"index": "Term"})
             st.dataframe(coef_table)
 
+            st.markdown("""
+            **How to read this table:**
+
+            - **`coef`**: log rate ratio.  
+              - Positive → higher injury rate than the reference group.  
+              - Negative → lower injury rate than the reference group.  
+            - **`Std.Err.`** and **`z`**: standard error and z-statistic for the coefficient.  
+            - **`P>|z|`**: p-value (small values indicate the effect is statistically significant).  
+            - **`[0.025, 0.975]`**: 95% confidence interval on the **log scale**.
+
+            Because the coefficients are on the log scale, they are easier to interpret
+            after exponentiation as **Incident Rate Ratios (IRR)**.
+            """)
+
             # ------------------------
-            # IRR 계산
+            # 6) IRR (Incident Rate Ratio) 계산
             # ------------------------
             params = nb_model.params.rename("coef")
             conf = nb_model.conf_int()
@@ -459,75 +510,20 @@ elif page == "📈 Model 1 – Negative Binomial":
                 use_container_width=True
             )
 
-            # ------------------------
-            # NB-adjusted Rate 계산
-            # ------------------------
-            model_df['mu_hat'] = nb_model.predict(
-                model_df,
-                offset=np.log(model_df['Population'])
-            )
-            model_df['Rate100k_nb'] = model_df['mu_hat'] / model_df['Population'] * 100000
+            st.markdown("""
+            **How to interpret IRR:**
 
-            # ------------------------
-            # 시각화 탭 구성 (NB adjusted + Forest Plot)
-            # ------------------------
-            tab1, tab2 = st.tabs(["NB-Adjusted Heatmaps", "Forest Plot"])
+            - **IRR = 1.0** → same injury rate as the reference group  
+            - **IRR > 1.0** → higher injury rate  
+              - e.g., IRR = 1.30 means **30% higher** injury rate than the reference group  
+            - **IRR < 1.0** → lower injury rate  
+              - e.g., IRR = 0.70 means **30% lower** injury rate  
 
-            # ==== Heatmaps ====
-            with tab1:
-                st.markdown("### NB-adjusted Injury Rates (per 100,000)")
+            The 95% confidence interval (**IRR_lower, IRR_upper**) shows the range of plausible
+            rate ratios:
+            - If the interval **does not include 1.**
 
-                # Race × AgeGroup
-                if {'Race', 'AgeGroup'}.issubset(model_df.columns):
-                    heat = model_df.groupby(['Race','AgeGroup'])['Rate100k_nb'].mean().unstack()
-                    fig, ax = plt.subplots(figsize=(8, 5))
-                    sns.heatmap(heat, cmap="viridis", ax=ax)
-                    ax.set_title("NB-adjusted Rate by Race × AgeGroup")
-                    st.pyplot(fig)
 
-                # Race × Urbanicity
-                if {'Race','Urbanicity_code'}.issubset(model_df.columns):
-                    heat = model_df.groupby(['Race','Urbanicity_code'])['Rate100k_nb'].mean().unstack()
-                    fig, ax = plt.subplots(figsize=(8, 5))
-                    sns.heatmap(heat, cmap="viridis", ax=ax)
-                    ax.set_title("NB-adjusted Rate by Race × Urbanicity")
-                    st.pyplot(fig)
-
-                # Race × Division
-                if {'Race','USCensusDivision'}.issubset(model_df.columns):
-                    heat = model_df.groupby(['Race','USCensusDivision'])['Rate100k_nb'].mean().unstack()
-                    fig, ax = plt.subplots(figsize=(10, 5))
-                    sns.heatmap(heat, cmap="viridis", ax=ax)
-                    ax.set_title("NB-adjusted Rate by Race × Census Division")
-                    st.pyplot(fig)
-
-                # Urbanicity × AgeGroup
-                if {'Urbanicity_code','AgeGroup'}.issubset(model_df.columns):
-                    heat = model_df.groupby(['Urbanicity_code','AgeGroup'])['Rate100k_nb'].mean().unstack()
-                    fig, ax = plt.subplots(figsize=(10, 5))
-                    sns.heatmap(heat, cmap="viridis", ax=ax)
-                    ax.set_title("NB-adjusted Rate by Urbanicity × AgeGroup")
-                    st.pyplot(fig)
-
-            # ==== Forest Plot ====
-            with tab2:
-                fig, ax = plt.subplots(figsize=(8, max(4, len(irr_sorted) * 0.3)))
-                ax.errorbar(
-                    irr_sorted["IRR"],
-                    irr_sorted.index,
-                    xerr=[
-                        irr_sorted["IRR"] - irr_sorted["IRR_lower"],
-                        irr_sorted["IRR_upper"] - irr_sorted["IRR"]
-                    ],
-                    fmt='o',
-                    ecolor='gray',
-                    capsize=4
-                )
-                ax.axvline(x=1.0, color='red', linestyle='--')
-                ax.set_xlabel("Incident Rate Ratio (IRR)")
-                ax.set_title("Negative Binomial Regression – Forest Plot")
-                plt.tight_layout()
-                st.pyplot(fig)
 
 
 
