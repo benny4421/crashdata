@@ -60,6 +60,7 @@ pages = {
     "🏛️ US Census Data Merging": "census_merging",
     "📊 Visualization": "visualization",
     "📈 Model 1 – Negative Binomial": "model1",
+    "🧬 Model 2 – Multinomial Logistic": "model2",
 }
 page = st.sidebar.radio("Go to", list(pages.keys()))
 
@@ -575,6 +576,144 @@ elif page == "📈 Model 1 – Negative Binomial":
                 plt.tight_layout()
                 st.pyplot(fig)
 
+
+# ----------------------------
+# 🧬 Model 2 – Multinomial Logistic Regression
+# ----------------------------
+elif page == "🧬 Model 2 – Multinomial Logistic":
+
+    st.title("🧬 Model 2 – Multinomial Logistic Regression")
+
+    st.markdown(
+        "Model 2 estimates which **type of crash-related complaint** a patient presents with, "
+        "based on demographic and geographic characteristics. "
+        "The outcome is a categorical variable with multiple levels, modeled via multinomial "
+        "logistic regression."
+    )
+
+    # 사용할 outcome 컬럼 (필요하면 나중에 바꿀 수 있음)
+    target_col = "Chief Complaint Anatomic Location"
+    if target_col not in fdf.columns:
+        st.error("Column '{}' not found in the dataset.".format(target_col))
+        st.stop()
+
+    # 설명 변수 후보
+    base_predictors = [
+        "Race",
+        "Gender",
+        "AgeGroup",
+        "USCensusDivision",
+        "Urbanicity_code",
+        "Year",
+    ]
+    predictors_m2 = [c for c in base_predictors if c in fdf.columns]
+
+    if not predictors_m2:
+        st.error("No predictor columns available for Model 2.")
+        st.stop()
+
+    st.subheader("Model Setup")
+    st.markdown(
+        "- Outcome (Y): **{}**\n".format(target_col)
+        + "- Predictors (X): **{}**".format(", ".join(predictors_m2))
+    )
+
+    # 데이터 전처리
+    # 1) 필요한 컬럼만 선택
+    cols_needed_m2 = [target_col] + predictors_m2
+    df_m2 = fdf[cols_needed_m2].dropna()
+
+    # 2) 카테고리 너무 많은 경우 상위 몇 개만 사용 (샘플 데이터용)
+    vc = df_m2[target_col].value_counts()
+    top_k = 5
+    top_classes = vc.head(top_k).index
+    df_m2 = df_m2[df_m2[target_col].isin(top_classes)]
+
+    # 3) 행 수 제한 (속도/안정성)
+    max_n = 5000
+    if len(df_m2) > max_n:
+        df_m2 = df_m2.sample(max_n, random_state=0)
+
+    st.markdown(
+        "Number of observations used for Model 2: **{}** (top {} outcome categories)".format(
+            len(df_m2), len(top_classes)
+        )
+    )
+
+    # 내부적으로 outcome 이름을 단순하게 바꾸기
+    df_m2 = df_m2.rename(columns={target_col: "Outcome"})
+
+    if st.button("Run Model 2 (Multinomial Logistic)"):
+
+        with st.spinner("Fitting multinomial logistic regression model..."):
+
+            # formula 구성: Outcome ~ C(Race) + C(Gender) + ...
+            # C()는 범주형 처리를 명시
+            formula_m2 = "Outcome ~ " + " + ".join(
+                ["C({})".format(col) for col in predictors_m2]
+            )
+
+            try:
+                mn_model = smf.mnlogit(formula_m2, data=df_m2).fit(disp=False)
+            except Exception as e:
+                st.error("Model fitting failed: {}".format(e))
+                st.stop()
+
+            st.subheader("Model Summary (Log-Odds Coefficients)")
+            st.caption("Formula: `{}`".format(formula_m2))
+
+            # summary2 테이블 중 coef 부분만 표시
+            try:
+                coef_table_m2 = (
+                    mn_model.summary2()
+                    .tables[1]
+                    .reset_index()
+                    .rename(columns={"index": "Outcome_Level / Term"})
+                )
+                st.dataframe(coef_table_m2, use_container_width=True)
+            except Exception:
+                # summary2 구조가 예상과 다를 경우 fallback
+                st.dataframe(mn_model.params, use_container_width=True)
+
+            st.markdown(
+                "**How to read this table:**\n"
+                "- 각 행은 한 **Outcome category vs reference outcome**에 대한 계수입니다.\n"
+                "- 값이 양수이면 해당 outcome이 baseline outcome에 비해 더 잘 발생하는 방향, "
+                "음수이면 덜 발생하는 방향입니다.\n"
+                "- 단, 계수는 log-odds이기 때문에, 해석은 odds ratio로 바꾸는 것이 더 직관적입니다."
+            )
+
+            # ------------------------
+            # Odds Ratio 계산
+            # ------------------------
+            st.subheader("Odds Ratios (exp(coef))")
+
+            params_m2 = mn_model.params  # DataFrame: rows = outcome levels (except base), cols = predictors
+            or_df = np.exp(params_m2)
+
+            st.dataframe(or_df, use_container_width=True)
+
+            st.markdown(
+                "**Interpretation of odds ratios:**\n"
+                "- 1보다 크면: 기준 그룹에 비해 해당 outcome이 발생할 **odds가 더 높음**\n"
+                "- 1보다 작으면: 기준 그룹에 비해 해당 outcome이 발생할 **odds가 더 낮음**\n"
+                "- 예: OR = 1.5 → 기준 대비 50% 높은 odds, OR = 0.7 → 기준 대비 30% 낮은 odds"
+            )
+
+            # ------------------------
+            # 간단한 예시 설명 텍스트 (요약용)
+            # ------------------------
+            st.subheader("Reading the Results")
+
+            st.markdown(
+                "각 행은 특정 complaint category (예: 머리, 가슴, 다리 등)와 "
+                "baseline complaint category를 비교합니다. 예를 들어, `Outcome = leg` 행의 "
+                "`C(Race)[T.Black or African American]` 계수가 양수이고 OR가 1.3이라면, "
+                "다른 조건이 같을 때 흑인 환자가 baseline 인종에 비해 **다리 관련 complaint를 "
+                "보일 odds가 약 30% 높다**는 의미로 해석할 수 있습니다.\n\n"
+                "이 페이지는 전체 분석을 요약하는 용도로, 보다 정교한 해석과 시각화는 "
+                "별도의 연구 보고서에서 제시할 수 있습니다."
+            )
 
 
 
