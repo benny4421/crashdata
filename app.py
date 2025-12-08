@@ -4,8 +4,6 @@ import streamlit as st
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
-import statsmodels.api as sm
-import statsmodels.formula.api as smf
 
 # ----------------------------
 # Page Setup
@@ -59,8 +57,6 @@ pages = {
     "🕵️ Handling Missing Values": "missing_values",
     "🏛️ US Census Data Merging": "census_merging",
     "📊 Visualization": "visualization",
-    "📈 Model 1 – Injury Counts (NegBin)": "model1",
-    "🧮 Model 2 – Injury Type (Multinomial)": "model2",
 }
 page = st.sidebar.radio("Go to", list(pages.keys()))
 
@@ -78,7 +74,7 @@ def safe_is_numeric(col):
 # Page Content
 # ----------------------------
 if page == "🏠 Overview":
-    st.title(" 🚑EMS-Reported Crash Injury Disparities: A Policy Analysis Tool")
+    st.title(" EMS-Reported Crash Injury Disparities: A Policy Analysis Tool")
     
     st.markdown("""
     This dashboard provides key insights into traffic injury disparities across the U.S. By analyzing national EMS data, I identify high-risk demographic subgroups to support data-driven policy and targeted safety interventions.
@@ -213,7 +209,7 @@ elif page == "🕵️ Handling Missing Values":
     st.pyplot(fig_after)
     st.caption("Each yellow line represents a missing value. The 'after' picture is much clearer.")
 
-    st.subheader("Step 4: Handling 'ageinyear' Values")
+    st.subheader("Step 4: Handling Missing 'ageinyear' Values")
     st.markdown("The `ageinyear` column had some missing values. My initial approach was to use a simple mean imputation.")
 
     mean_age = fdf_cleaned['ageinyear'].mean()
@@ -310,6 +306,8 @@ elif page == "🏛️ US Census Data Merging":
 elif page == "📊 Visualization":
     st.title("📊 Key Visualizations")
     
+
+
     col1, col2 = st.columns(2)
 
     # Chart 1: Gender Donut
@@ -357,182 +355,7 @@ elif page == "📊 Visualization":
             fig_div.update_layout(xaxis_tickangle=35, showlegend=False)
             st.plotly_chart(fig_div, use_container_width=True)
 
-# ----------------------------
-# 📈 Model 1 – Negative Binomial Count Model
-# ----------------------------
-elif page == "📈 Model 1 – Injury Counts (NegBin)":
-    st.title("📈 Model 1 – Negative Binomial Count Model")
 
-    st.markdown("""
-    This page fits a **Negative Binomial regression** model for EMS-reported crash **counts**  
-    across demographic groups. The goal is to estimate how injury burden changes by
-    **age group, gender, race, and Census division**, while (optionally) adjusting for
-    population denominators.
-    """)
 
-    # --- Controls ---
-    st.subheader("Model Setup")
 
-    # Candidate grouping / predictor variables (only if they exist in the data)
-    candidate_group_cols = [c for c in ["USCensusDivision", "Gender", "Race", "AgeGroup"] if c in fdf.columns]
-    default_groups = candidate_group_cols.copy()
-
-    group_cols = st.multiselect(
-        "Grouping variables (used both to aggregate counts and as predictors):",
-        candidate_group_cols,
-        default=default_groups,
-        help="Each unique combination of these variables forms one row in the count model."
-    )
-
-    # Year filter (if Year exists)
-    if "Year" in fdf.columns:
-        min_year = int(fdf["Year"].dropna().min())
-        max_year = int(fdf["Year"].dropna().max())
-        year_range = st.slider("Year range", min_year, max_year, (min_year, max_year), step=1)
-        data_model1 = fdf[(fdf["Year"] >= year_range[0]) & (fdf["Year"] <= year_range[1])]
-    else:
-        data_model1 = fdf.copy()
-
-    use_population_offset = "Population" in data_model1.columns
-    if use_population_offset:
-        st.info("`Population` column detected. The model will include **log(population)** as an offset (incidents per person).")
-    else:
-        st.warning("No `Population` column detected. The model will be fit on raw counts without a population offset.")
-
-    if st.button("Run Model 1 (Negative Binomial)"):
-        if not group_cols:
-            st.error("Please select at least one grouping variable.")
-        else:
-            # Aggregate counts
-            agg = data_model1.dropna(subset=group_cols).copy()
-            agg = agg.groupby(group_cols).size().reset_index(name="CrashCount")
-
-            if use_population_offset:
-                # Use the first population value for each cell (they should be identical after merge)
-                pop_df = (
-                    data_model1.dropna(subset=group_cols)
-                    .groupby(group_cols)["Population"]
-                    .first()
-                    .reset_index()
-                )
-                agg = agg.merge(pop_df, on=group_cols, how="left")
-
-            # Build formula: CrashCount ~ C(Gender) + C(Race) + ...
-            terms = [f"C({col})" for col in group_cols if col in agg.columns]
-            if terms:
-                formula = "CrashCount ~ " + " + ".join(terms)
-            else:
-                formula = "CrashCount ~ 1"
-
-            try:
-                if use_population_offset:
-                    model = smf.glm(
-                        formula=formula,
-                        data=agg,
-                        family=sm.families.NegativeBinomial(),
-                        offset=np.log(agg["Population"])
-                    )
-                else:
-                    model = smf.glm(
-                        formula=formula,
-                        data=agg,
-                        family=sm.families.NegativeBinomial()
-                    )
-
-                result = model.fit()
-
-                st.subheader("Model 1 Results – Coefficients")
-                summary_table = result.summary2().tables[1].reset_index().rename(columns={"index": "Term"})
-                st.dataframe(summary_table)
-
-                st.caption("Interpretation: Coefficients are on the **log rate** scale. "
-                           "Exponentiating (`exp(coef)`) gives the multiplicative effect on crash counts.")
-
-                # Optional: show exponentiated coefficients
-                exp_coefs = np.exp(result.params)
-                exp_df = exp_coefs.reset_index()
-                exp_df.columns = ["Term", "Rate Ratio (exp(coef))"]
-                st.subheader("Rate Ratios (exp(coef))")
-                st.dataframe(exp_df)
-
-            except Exception as e:
-                st.error(f"Model fitting failed: {e}")
-
-# ----------------------------
-# 🧮 Model 2 – Multinomial Logistic Regression
-# ----------------------------
-elif page == "🧮 Model 2 – Injury Type (Multinomial)":
-    st.title("🧮 Model 2 – Multinomial Logistic Regression")
-
-    st.markdown("""
-    This page fits a **multinomial logistic regression** model to predict **injury type / outcome**
-    from demographic characteristics.  
-    You can select a categorical outcome (3+ levels) and choose predictors such as age group,
-    gender, race, or Census division.
-    """)
-
-    # --- Identify candidate outcome variables (categorical with a small number of levels) ---
-    cat_cols = []
-    for col in fdf.columns:
-        if pd.api.types.is_object_dtype(fdf[col]) or pd.api.types.is_categorical_dtype(fdf[col]):
-            n_unique = fdf[col].nunique(dropna=True)
-            if 3 <= n_unique <= 10:  # reasonable size for multinomial outcome
-                cat_cols.append(col)
-
-    if not cat_cols:
-        st.error("No suitable categorical outcome variables (3–10 levels) were found in the dataset.")
-    else:
-        outcome_var = st.selectbox(
-            "Select outcome (injury/outcome type) variable:",
-            cat_cols,
-            help="This variable will be modeled with multinomial logistic regression."
-        )
-
-        # Candidate predictors
-        candidate_preds = [c for c in ["AgeGroup", "Gender", "Race", "USCensusDivision", "Year"] if c in fdf.columns]
-        default_preds = [c for c in ["AgeGroup", "Gender", "Race", "USCensusDivision"] if c in candidate_preds]
-
-        predictor_vars = st.multiselect(
-            "Select predictor variables:",
-            candidate_preds,
-            default=default_preds,
-            help="Predictors will be one-hot encoded before fitting the model."
-        )
-
-        if st.button("Run Model 2 (Multinomial Logit)"):
-            if not predictor_vars:
-                st.error("Please select at least one predictor variable.")
-            else:
-                data_model2 = fdf.dropna(subset=[outcome_var] + predictor_vars).copy()
-
-                if data_model2.empty:
-                    st.error("After dropping missing values, there are no rows left to fit the model.")
-                else:
-                    # Encode outcome as categorical codes
-                    y_cat = pd.Categorical(data_model2[outcome_var])
-                    y = y_cat.codes
-                    class_labels = list(y_cat.categories)
-
-                    # One-hot encode predictors
-                    X = pd.get_dummies(data_model2[predictor_vars], drop_first=True)
-                    X = sm.add_constant(X, prepend=False)
-
-                    try:
-                        mnlogit_model = sm.MNLogit(y, X)
-                        mnlogit_result = mnlogit_model.fit(maxiter=200, disp=False)
-
-                        st.subheader("Model 2 Results – Coefficients (Log-Odds)")
-
-                        coef_df = mnlogit_result.params.T.copy()
-                        coef_df.columns = [f"{label} vs base" for label in class_labels[1:]]
-                        coef_df = coef_df.reset_index().rename(columns={"index": "Predictor"})
-                        st.dataframe(coef_df)
-
-                        st.caption(
-                            "Each column corresponds to a comparison between an outcome category and the base category "
-                            f"(`{class_labels[0]}`). Coefficients are on the **log-odds** scale."
-                        )
-
-                    except Exception as e:
-                        st.error(f"Multinomial model fitting failed: {e}")
 
