@@ -78,7 +78,7 @@ def safe_is_numeric(col):
 # Page Content
 # ----------------------------
 if page == "🏠 Overview":
-    st.title(" EMS-Reported Crash Injury Disparities: A Policy Analysis Tool")
+    st.title(" 🚑EMS-Reported Crash Injury Disparities: A Policy Analysis Tool")
     
     st.markdown("""
     This dashboard provides key insights into traffic injury disparities across the U.S. By analyzing national EMS data, I identify high-risk demographic subgroups to support data-driven policy and targeted safety interventions.
@@ -535,3 +535,4 @@ elif page == "🧮 Model 2 – Injury Type (Multinomial)":
 
                     except Exception as e:
                         st.error(f"Multinomial model fitting failed: {e}")
+
