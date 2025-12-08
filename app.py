@@ -77,7 +77,7 @@ def safe_is_numeric(col):
 # Page Content
 # ----------------------------
 if page == "🏠 Overview":
-    st.title(" EMS-Reported Crash Injury Disparities: A Policy Analysis Tool")
+    st.title(" 🚑EMS-Reported Crash Injury Disparities: A Policy Analysis Tool")
     
     st.markdown("""
     This dashboard provides key insights into traffic injury disparities across the U.S. By analyzing national EMS data, I identify high-risk demographic subgroups to support data-driven policy and targeted safety interventions.
@@ -94,8 +94,9 @@ if page == "🏠 Overview":
     st.subheader("Data at a Glance")
     st.markdown("""
     - **Sources**:
-    - National EMS Information System (NEMSIS), 2018–2022  
-    - U.S. Census Bureau — 2018–2022 American Community Survey (ACS) 5-Year Estimates
+    1. National EMS Information System (NEMSIS), 2018–2022  
+    2. U.S. Census Bureau — 2018–2022 American Community Survey (ACS) 5-Year Estimates
+    3. Historical weather data (2018–2022), used in the broader research project to capture conditions such as precipitation, snowfall, temperature, and visibility
     - **Full Dataset**: The complete research dataset contains ~6 million records.
     - **App Dataset**: For interactive performance, this dashboard uses a **100,000-record sample** to illustrate key trends.
     """)
@@ -527,5 +528,6 @@ elif page == "📈 Model 1 – Negative Binomial":
                 ax.set_title("Negative Binomial Regression – Forest Plot")
                 plt.tight_layout()
                 st.pyplot(fig)
+
 
 
