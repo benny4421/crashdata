@@ -177,7 +177,4 @@ Model 2 shows systematic variation in complaint types (head/neck, chest, extremi
 - On-demand model fitting  
 - Dataframe previews  
 
----
-
-# 📁 Repository Structure
 
