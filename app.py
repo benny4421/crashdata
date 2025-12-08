@@ -585,19 +585,19 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
     st.title("🧬 Model 2 – Multinomial Logistic Regression")
 
     st.markdown(
-        "Model 2 estimates which **type of crash-related complaint** a patient presents with, "
+        "Model 2 estimates which type of crash-related complaint a patient presents with, "
         "based on demographic and geographic characteristics. "
         "The outcome is a categorical variable with multiple levels, modeled via multinomial "
         "logistic regression."
     )
 
-    # 사용할 outcome 컬럼 (필요하면 나중에 바꿀 수 있음)
+    # Outcome column to model
     target_col = "Chief Complaint Anatomic Location"
     if target_col not in fdf.columns:
         st.error("Column '{}' not found in the dataset.".format(target_col))
         st.stop()
 
-    # 설명 변수 후보
+    # Candidate predictors
     base_predictors = [
         "Race",
         "Gender",
@@ -618,18 +618,25 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
         + "- Predictors (X): **{}**".format(", ".join(predictors_m2))
     )
 
-    # 데이터 전처리
-    # 1) 필요한 컬럼만 선택
+    # ------------------------
+    # Data preparation
+    # ------------------------
     cols_needed_m2 = [target_col] + predictors_m2
     df_m2 = fdf[cols_needed_m2].dropna()
 
-    # 2) 카테고리 너무 많은 경우 상위 몇 개만 사용 (샘플 데이터용)
+    # Fix nullable Int64 types so statsmodels can handle them
+    import pandas.api.types as ptypes
+    for col in predictors_m2:
+        if str(df_m2[col].dtype) == "Int64" or ptypes.is_integer_dtype(df_m2[col].dtype):
+            df_m2[col] = df_m2[col].astype("int64")
+
+    # Limit to top-k most frequent outcome classes (for stability & speed)
     vc = df_m2[target_col].value_counts()
     top_k = 5
     top_classes = vc.head(top_k).index
     df_m2 = df_m2[df_m2[target_col].isin(top_classes)]
 
-    # 3) 행 수 제한 (속도/안정성)
+    # Row limit for speed
     max_n = 5000
     if len(df_m2) > max_n:
         df_m2 = df_m2.sample(max_n, random_state=0)
@@ -640,15 +647,14 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
         )
     )
 
-    # 내부적으로 outcome 이름을 단순하게 바꾸기
+    # Rename outcome for convenience
     df_m2 = df_m2.rename(columns={target_col: "Outcome"})
 
     if st.button("Run Model 2 (Multinomial Logistic)"):
 
         with st.spinner("Fitting multinomial logistic regression model..."):
 
-            # formula 구성: Outcome ~ C(Race) + C(Gender) + ...
-            # C()는 범주형 처리를 명시
+            # Treat all predictors as categorical
             formula_m2 = "Outcome ~ " + " + ".join(
                 ["C({})".format(col) for col in predictors_m2]
             )
@@ -659,10 +665,12 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
                 st.error("Model fitting failed: {}".format(e))
                 st.stop()
 
+            # ------------------------
+            # Coefficient table (log-odds)
+            # ------------------------
             st.subheader("Model Summary (Log-Odds Coefficients)")
             st.caption("Formula: `{}`".format(formula_m2))
 
-            # summary2 테이블 중 coef 부분만 표시
             try:
                 coef_table_m2 = (
                     mn_model.summary2()
@@ -672,47 +680,48 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
                 )
                 st.dataframe(coef_table_m2, use_container_width=True)
             except Exception:
-                # summary2 구조가 예상과 다를 경우 fallback
                 st.dataframe(mn_model.params, use_container_width=True)
 
             st.markdown(
                 "**How to read this table:**\n"
-                "- 각 행은 한 **Outcome category vs reference outcome**에 대한 계수입니다.\n"
-                "- 값이 양수이면 해당 outcome이 baseline outcome에 비해 더 잘 발생하는 방향, "
-                "음수이면 덜 발생하는 방향입니다.\n"
-                "- 단, 계수는 log-odds이기 때문에, 해석은 odds ratio로 바꾸는 것이 더 직관적입니다."
+                "- Each row corresponds to a specific outcome category compared to the baseline outcome.\n"
+                "- A positive coefficient means that, for that predictor level, the log-odds of this outcome "
+                "(relative to the baseline outcome) increase.\n"
+                "- A negative coefficient means lower log-odds compared to the baseline outcome.\n"
+                "- Because coefficients are on the log-odds scale, exponentiating them gives odds ratios, "
+                "which are easier to interpret."
             )
 
             # ------------------------
-            # Odds Ratio 계산
+            # Odds Ratios
             # ------------------------
             st.subheader("Odds Ratios (exp(coef))")
 
-            params_m2 = mn_model.params  # DataFrame: rows = outcome levels (except base), cols = predictors
+            params_m2 = mn_model.params  # rows = outcome levels (except base), cols = predictors
             or_df = np.exp(params_m2)
-
             st.dataframe(or_df, use_container_width=True)
 
             st.markdown(
-                "**Interpretation of odds ratios:**\n"
-                "- 1보다 크면: 기준 그룹에 비해 해당 outcome이 발생할 **odds가 더 높음**\n"
-                "- 1보다 작으면: 기준 그룹에 비해 해당 outcome이 발생할 **odds가 더 낮음**\n"
-                "- 예: OR = 1.5 → 기준 대비 50% 높은 odds, OR = 0.7 → 기준 대비 30% 낮은 odds"
+                "**How to interpret odds ratios:**\n"
+                "- OR > 1: higher odds of this outcome compared to the baseline outcome (holding other variables constant).\n"
+                "- OR < 1: lower odds of this outcome compared to the baseline outcome.\n"
+                "- Example: OR = 1.5 means 50% higher odds; OR = 0.7 means 30% lower odds."
             )
 
             # ------------------------
-            # 간단한 예시 설명 텍스트 (요약용)
+            # Short interpretation guide
             # ------------------------
-            st.subheader("Reading the Results")
+            st.subheader("Interpreting the Results")
 
             st.markdown(
-                "각 행은 특정 complaint category (예: 머리, 가슴, 다리 등)와 "
-                "baseline complaint category를 비교합니다. 예를 들어, `Outcome = leg` 행의 "
-                "`C(Race)[T.Black or African American]` 계수가 양수이고 OR가 1.3이라면, "
-                "다른 조건이 같을 때 흑인 환자가 baseline 인종에 비해 **다리 관련 complaint를 "
-                "보일 odds가 약 30% 높다**는 의미로 해석할 수 있습니다.\n\n"
-                "이 페이지는 전체 분석을 요약하는 용도로, 보다 정교한 해석과 시각화는 "
-                "별도의 연구 보고서에서 제시할 수 있습니다."
+                "Each row in the coefficient and odds-ratio tables describes how a predictor is associated with "
+                "the likelihood of a specific complaint category, compared to the baseline complaint category.\n\n"
+                "For example, if for a given outcome level the term `C(Race)[T.Black or African American]` "
+                "has an odds ratio of 1.3, this means that, holding other variables fixed, Black or African American "
+                "patients have about **30% higher odds** of presenting with that complaint type than patients in the "
+                "reference race group.\n\n"
+                "This page is intended as a high-level summary of Model 2. A more detailed interpretation, including "
+                "confidence intervals and subgroup-specific marginal effects, would be provided in the full research report."
             )
 
 
