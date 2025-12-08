@@ -38,8 +38,9 @@ EMS-reported crash incidents with demographics, timestamps, complaint types, loc
 ### 2. **ACS 5-Year Estimates (2018–2022)**  
 Used in the research version to build population denominators:
 
+### **3. NOAA Daily Weather Data (Integrated in Research Version)**  
+To contextualize crash risks, the research pipeline incorporates **NOAA Global Historical Climatology Network (GHCN-Daily)** datasets (2018–2022)
 
-> The Streamlit app uses a sampled EMS dataset without ACS merging, but the analytic workflow is shown for transparency.
 
 ---
 
@@ -73,14 +74,13 @@ Included in the app’s **Visualization** page:
 - Crash trends by Year  
 - Crash counts by U.S. Census Division  
 
-All represent **raw counts**, not population-normalized metrics.
+
 
 ---
 
 # 🧭 Missing Data Strategy
 
-### ❌ Mean Imputation (Rejected)  
-Created unrealistic distribution spikes (e.g., ages clustering at the mean).
+
 
 ### ✔ Final Handling  
 - Cleaned semantic nulls  
