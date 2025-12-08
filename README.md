@@ -3,7 +3,7 @@
 **Goal:** Build a policy-facing analytics tool to identify demographic disparities in EMS-attended motor-vehicle crash injuries across the United States.
 
 **Deployed App:**  
-🔗 https://cmse830fds-3zuewsuxruovjwtxwiyqh9.streamlit.app/
+🔗 https://ems-crash-analysis-jbc.streamlit.app/
 
 **Notebook:**  
 `EMS_Analysis_Project (4).ipynb`
