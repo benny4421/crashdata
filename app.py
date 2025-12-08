@@ -6,6 +6,8 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import LabelEncoder
 
 # ----------------------------
 # Page Setup
@@ -624,13 +626,7 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
     cols_needed_m2 = [target_col] + predictors_m2
     df_m2 = fdf[cols_needed_m2].dropna().copy()
 
-    # Fix nullable Int64 types so statsmodels can handle them
-    import pandas.api.types as ptypes
-    for col in predictors_m2:
-        if str(df_m2[col].dtype) == "Int64" or ptypes.is_integer_dtype(df_m2[col].dtype):
-            df_m2[col] = df_m2[col].astype("int64")
-
-    # Limit to top-k most frequent outcome classes (for stability & speed)
+    # Limit outcome to top-k most frequent classes for stability/speed
     vc = df_m2[target_col].value_counts()
     top_k = 5
     top_classes = vc.head(top_k).index
@@ -641,39 +637,34 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
     if len(df_m2) > max_n:
         df_m2 = df_m2.sample(max_n, random_state=0).copy()
 
-    # Create numeric outcome codes for MNLogit
-    df_m2["Outcome"] = df_m2[target_col].astype(str)
-    cat = pd.Categorical(df_m2["Outcome"])
-    df_m2["Outcome_code"] = cat.codes.astype(int)
-
-    # Mapping from code → human-readable outcome label
-    mapping_df = pd.DataFrame(
-        {
-            "Outcome_code": range(len(cat.categories)),
-            "Outcome_label": cat.categories,
-        }
-    )
-
     st.markdown(
         "Number of observations used for Model 2: **{}** (top {} outcome categories)".format(
             len(df_m2), len(top_classes)
         )
     )
 
-    with st.expander("Outcome code mapping"):
-        st.dataframe(mapping_df, use_container_width=True)
+    # ------------------------
+    # Encode X (one-hot) and y (label encoded)
+    # ------------------------
+    # Treat all predictors as categorical for now
+    X_raw = df_m2[predictors_m2].astype(str)
+    X = pd.get_dummies(X_raw, drop_first=True)
+
+    # Encode outcome labels as integers 0..K-1
+    le = LabelEncoder()
+    y = le.fit_transform(df_m2[target_col].astype(str))
 
     if st.button("Run Model 2 (Multinomial Logistic)"):
 
-        with st.spinner("Fitting multinomial logistic regression model..."):
-
-            # Treat predictors as categorical in the formula
-            formula_m2 = "Outcome_code ~ " + " + ".join(
-                ["C({})".format(col) for col in predictors_m2]
-            )
+        with st.spinner("Fitting multinomial logistic regression model (scikit-learn)..."):
 
             try:
-                mn_model = smf.mnlogit(formula_m2, data=df_m2).fit(disp=False)
+                clf = LogisticRegression(
+                    multi_class="multinomial",
+                    solver="lbfgs",
+                    max_iter=500
+                )
+                clf.fit(X, y)
             except Exception as e:
                 st.error("Model fitting failed: {}".format(e))
                 st.stop()
@@ -681,78 +672,55 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
             # ------------------------
             # Coefficient table (log-odds)
             # ------------------------
-            st.subheader("Model Summary (Log-Odds Coefficients)")
-            st.caption("Formula: `{}`".format(formula_m2))
+            st.subheader("Model Coefficients (Log-Odds)")
 
-            try:
-                coef_table_m2 = (
-                    mn_model.summary2()
-                    .tables[1]
-                    .reset_index()
-                    .rename(columns={"index": "Equation / Term"})
-                )
-                st.dataframe(coef_table_m2, use_container_width=True)
-            except Exception:
-                st.dataframe(mn_model.params, use_container_width=True)
+            classes = le.inverse_transform(np.arange(len(clf.classes_)))
+            coef_df = pd.DataFrame(clf.coef_, columns=X.columns)
+            coef_df.insert(0, "Outcome", classes)
+
+            st.dataframe(coef_df, use_container_width=True)
 
             st.markdown(
                 "**How to read this table:**\n"
-                "- Each equation corresponds to one outcome category compared to a baseline outcome.\n"
-                "- A positive coefficient means that, for that predictor level, the log-odds of that "
-                "outcome (relative to the baseline outcome) increase.\n"
-                "- A negative coefficient means lower log-odds compared to the baseline outcome.\n"
-                "- Coefficients are on the log-odds scale; exponentiating them gives odds ratios."
+                "- Each row corresponds to one outcome category relative to an implicit baseline.\n"
+                "- Each column (after 'Outcome') is a predictor level.\n"
+                "- Positive coefficients: higher log-odds of that complaint type when that predictor level is present.\n"
+                "- Negative coefficients: lower log-odds."
             )
 
             # ------------------------
-            # Odds Ratios
+            # Odds ratios
             # ------------------------
             st.subheader("Odds Ratios (exp(coef))")
 
-            params_m2 = mn_model.params  # rows = outcome equations, cols = predictors
-            or_df = np.exp(params_m2)
-
-            # Attach a friendlier index if possible
-            # MNLogit typically uses integer equation labels 0,1,2,... (excluding the baseline)
-            eq_labels = []
-            for eq in or_df.index:
-                # eq is usually an integer code; map it to the outcome label if available
-                try:
-                    code_int = int(eq)
-                    if code_int < len(mapping_df):
-                        label = mapping_df.loc[mapping_df["Outcome_code"] == code_int, "Outcome_label"].iloc[0]
-                        eq_labels.append(f"{code_int} – {label}")
-                    else:
-                        eq_labels.append(str(eq))
-                except Exception:
-                    eq_labels.append(str(eq))
-            or_df.index = eq_labels
+            or_df = coef_df.copy()
+            or_df.iloc[:, 1:] = np.exp(or_df.iloc[:, 1:])
 
             st.dataframe(or_df, use_container_width=True)
 
             st.markdown(
                 "**How to interpret odds ratios:**\n"
-                "- OR > 1: higher odds of this outcome (for that equation) compared to the baseline outcome, "
-                "holding other variables constant.\n"
-                "- OR < 1: lower odds of this outcome compared to the baseline.\n"
-                "- Example: OR = 1.5 means 50% higher odds; OR = 0.7 means 30% lower odds."
+                "- Values > 1 indicate higher odds of that complaint category when that predictor level is present.\n"
+                "- Values < 1 indicate lower odds.\n"
+                "- Example: an odds ratio of 1.5 means 50% higher odds; 0.7 means 30% lower odds, "
+                "holding all other predictors constant."
             )
 
             # ------------------------
-            # Short interpretation guide
+            # Short interpretation text
             # ------------------------
             st.subheader("Interpreting the Results")
 
             st.markdown(
-                "Each row in the coefficient and odds-ratio tables describes how a predictor is associated with "
-                "the likelihood of a specific complaint category, compared to the baseline complaint category.\n\n"
-                "For example, suppose for the equation corresponding to `Outcome_code = 2 – Chest` the term "
-                "`C(Race)[T.Black or African American]` has an odds ratio of 1.3. This means that, holding other "
-                "variables fixed, Black or African American patients have about **30% higher odds** of presenting "
-                "with a chest-related complaint than patients in the reference race group, relative to the baseline "
-                "outcome category.\n\n"
-                "This page provides a high-level summary of Model 2. A full research report would include "
-                "confidence intervals, significance tests, and marginal effects for selected subgroups."
+                "Each row describes how the predictors are associated with the likelihood of a specific anatomic "
+                "complaint category, compared to the implicit baseline set by the model. For example, if in the row "
+                "for a 'Head/Neck' complaint the column `Race=Black or African American` has an odds ratio of 1.3, "
+                "this means that, holding the other variables fixed, Black or African American patients have about "
+                "**30% higher odds** of presenting with a head/neck complaint compared to the reference race group.\n\n"
+                "This in-app model is intended as a compact illustration of how multinomial logistic regression can "
+                "be used to study the distribution of crash-related complaint types across demographic and regional "
+                "subgroups. A full research report would include confidence intervals, statistical significance, and "
+                "more detailed visualization of predicted probabilities."
             )
 
 
