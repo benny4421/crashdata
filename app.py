@@ -622,7 +622,7 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
     # Data preparation
     # ------------------------
     cols_needed_m2 = [target_col] + predictors_m2
-    df_m2 = fdf[cols_needed_m2].dropna()
+    df_m2 = fdf[cols_needed_m2].dropna().copy()
 
     # Fix nullable Int64 types so statsmodels can handle them
     import pandas.api.types as ptypes
@@ -634,12 +634,25 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
     vc = df_m2[target_col].value_counts()
     top_k = 5
     top_classes = vc.head(top_k).index
-    df_m2 = df_m2[df_m2[target_col].isin(top_classes)]
+    df_m2 = df_m2[df_m2[target_col].isin(top_classes)].copy()
 
     # Row limit for speed
     max_n = 5000
     if len(df_m2) > max_n:
-        df_m2 = df_m2.sample(max_n, random_state=0)
+        df_m2 = df_m2.sample(max_n, random_state=0).copy()
+
+    # Create numeric outcome codes for MNLogit
+    df_m2["Outcome"] = df_m2[target_col].astype(str)
+    cat = pd.Categorical(df_m2["Outcome"])
+    df_m2["Outcome_code"] = cat.codes.astype(int)
+
+    # Mapping from code → human-readable outcome label
+    mapping_df = pd.DataFrame(
+        {
+            "Outcome_code": range(len(cat.categories)),
+            "Outcome_label": cat.categories,
+        }
+    )
 
     st.markdown(
         "Number of observations used for Model 2: **{}** (top {} outcome categories)".format(
@@ -647,15 +660,15 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
         )
     )
 
-    # Rename outcome for convenience
-    df_m2 = df_m2.rename(columns={target_col: "Outcome"})
+    with st.expander("Outcome code mapping"):
+        st.dataframe(mapping_df, use_container_width=True)
 
     if st.button("Run Model 2 (Multinomial Logistic)"):
 
         with st.spinner("Fitting multinomial logistic regression model..."):
 
-            # Treat all predictors as categorical
-            formula_m2 = "Outcome ~ " + " + ".join(
+            # Treat predictors as categorical in the formula
+            formula_m2 = "Outcome_code ~ " + " + ".join(
                 ["C({})".format(col) for col in predictors_m2]
             )
 
@@ -676,7 +689,7 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
                     mn_model.summary2()
                     .tables[1]
                     .reset_index()
-                    .rename(columns={"index": "Outcome_Level / Term"})
+                    .rename(columns={"index": "Equation / Term"})
                 )
                 st.dataframe(coef_table_m2, use_container_width=True)
             except Exception:
@@ -684,12 +697,11 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
 
             st.markdown(
                 "**How to read this table:**\n"
-                "- Each row corresponds to a specific outcome category compared to the baseline outcome.\n"
-                "- A positive coefficient means that, for that predictor level, the log-odds of this outcome "
-                "(relative to the baseline outcome) increase.\n"
+                "- Each equation corresponds to one outcome category compared to a baseline outcome.\n"
+                "- A positive coefficient means that, for that predictor level, the log-odds of that "
+                "outcome (relative to the baseline outcome) increase.\n"
                 "- A negative coefficient means lower log-odds compared to the baseline outcome.\n"
-                "- Because coefficients are on the log-odds scale, exponentiating them gives odds ratios, "
-                "which are easier to interpret."
+                "- Coefficients are on the log-odds scale; exponentiating them gives odds ratios."
             )
 
             # ------------------------
@@ -697,14 +709,32 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
             # ------------------------
             st.subheader("Odds Ratios (exp(coef))")
 
-            params_m2 = mn_model.params  # rows = outcome levels (except base), cols = predictors
+            params_m2 = mn_model.params  # rows = outcome equations, cols = predictors
             or_df = np.exp(params_m2)
+
+            # Attach a friendlier index if possible
+            # MNLogit typically uses integer equation labels 0,1,2,... (excluding the baseline)
+            eq_labels = []
+            for eq in or_df.index:
+                # eq is usually an integer code; map it to the outcome label if available
+                try:
+                    code_int = int(eq)
+                    if code_int < len(mapping_df):
+                        label = mapping_df.loc[mapping_df["Outcome_code"] == code_int, "Outcome_label"].iloc[0]
+                        eq_labels.append(f"{code_int} – {label}")
+                    else:
+                        eq_labels.append(str(eq))
+                except Exception:
+                    eq_labels.append(str(eq))
+            or_df.index = eq_labels
+
             st.dataframe(or_df, use_container_width=True)
 
             st.markdown(
                 "**How to interpret odds ratios:**\n"
-                "- OR > 1: higher odds of this outcome compared to the baseline outcome (holding other variables constant).\n"
-                "- OR < 1: lower odds of this outcome compared to the baseline outcome.\n"
+                "- OR > 1: higher odds of this outcome (for that equation) compared to the baseline outcome, "
+                "holding other variables constant.\n"
+                "- OR < 1: lower odds of this outcome compared to the baseline.\n"
                 "- Example: OR = 1.5 means 50% higher odds; OR = 0.7 means 30% lower odds."
             )
 
@@ -716,13 +746,15 @@ elif page == "🧬 Model 2 – Multinomial Logistic":
             st.markdown(
                 "Each row in the coefficient and odds-ratio tables describes how a predictor is associated with "
                 "the likelihood of a specific complaint category, compared to the baseline complaint category.\n\n"
-                "For example, if for a given outcome level the term `C(Race)[T.Black or African American]` "
-                "has an odds ratio of 1.3, this means that, holding other variables fixed, Black or African American "
-                "patients have about **30% higher odds** of presenting with that complaint type than patients in the "
-                "reference race group.\n\n"
-                "This page is intended as a high-level summary of Model 2. A more detailed interpretation, including "
-                "confidence intervals and subgroup-specific marginal effects, would be provided in the full research report."
+                "For example, suppose for the equation corresponding to `Outcome_code = 2 – Chest` the term "
+                "`C(Race)[T.Black or African American]` has an odds ratio of 1.3. This means that, holding other "
+                "variables fixed, Black or African American patients have about **30% higher odds** of presenting "
+                "with a chest-related complaint than patients in the reference race group, relative to the baseline "
+                "outcome category.\n\n"
+                "This page provides a high-level summary of Model 2. A full research report would include "
+                "confidence intervals, significance tests, and marginal effects for selected subgroups."
             )
+
 
 
 
